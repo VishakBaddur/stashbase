@@ -85,17 +85,22 @@ function sourcePathForAbs(absPath: string): string {
 }
 
 /** Resolve an explicit-folder request without allowing a symlink inside the
- * library folder to redirect preparation/extraction outside that folder. */
-function requireExistingFileInFolder(folderRoot: string, rel: string): string {
+ * library folder to redirect preparation/extraction outside that folder.
+ *
+ * Async so the containment/symlink checks (resolveUnderAsync) and the
+ * existence/type checks below don't block the single Node event loop that
+ * serves every window's file, search, and MCP requests. */
+async function requireExistingFileInFolderAsync(folderRoot: string, rel: string): Promise<string> {
   let abs: string;
   try {
-    abs = filesystemPath.resolveUnder(folderRoot, rel);
+    abs = await filesystemPath.resolveUnderAsync(folderRoot, rel);
   } catch (cause) {
     const err = new Error('path escapes folder', { cause });
     (err as any).status = 400;
     throw err;
   }
-  if (!fs.existsSync(abs)) {
+  const exists = await fs.promises.access(abs).then(() => true, () => false);
+  if (!exists) {
     clearRecord(sourcePathForAbs(abs));
     const err = new Error('file not found');
     (err as any).status = 404;
@@ -103,13 +108,14 @@ function requireExistingFileInFolder(folderRoot: string, rel: string): string {
   }
 
   try {
-    abs = filesystemPath.resolveUnder(folderRoot, rel, { access: 'existing' });
+    abs = await filesystemPath.resolveUnderAsync(folderRoot, rel, { access: 'existing' });
   } catch (cause) {
     const err = new Error('path escapes folder through symlink', { cause });
     (err as any).status = 400;
     throw err;
   }
-  if (!fs.statSync(abs).isFile()) {
+  const stat = await fs.promises.stat(abs);
+  if (!stat.isFile()) {
     const err = new Error('file not found');
     (err as any).status = 404;
     throw err;
@@ -117,11 +123,11 @@ function requireExistingFileInFolder(folderRoot: string, rel: string): string {
   return abs;
 }
 
-export function reprocessFileInFolder(
+export async function reprocessFileInFolder(
   relPath: string,
   folderName?: string,
   options: { language?: string } = {},
-): 'conversion' | 'index' {
+): Promise<'conversion' | 'index'> {
   const rel = typeof relPath === 'string' ? relPath.trim() : '';
   if (!rel) {
     const err = new Error('path required');
@@ -131,7 +137,7 @@ export function reprocessFileInFolder(
 
   const { folderRoot } = requireRequestFolder(folderName?.trim() || undefined);
 
-  const abs = requireExistingFileInFolder(folderRoot, rel);
+  const abs = await requireExistingFileInFolderAsync(folderRoot, rel);
   const sourcePath = sourcePathForAbs(abs);
   if (isConversionPending(sourcePath)) {
     // A manual retry promotes queued work; running work is non-preemptive.
@@ -179,7 +185,7 @@ async function cancelFilePreparationInFolder(relPath: string, folderName?: strin
     throw err;
   }
   const { folderRoot } = requireRequestFolder(folderName?.trim() || undefined);
-  const abs = requireExistingFileInFolder(folderRoot, rel);
+  const abs = await requireExistingFileInFolderAsync(folderRoot, rel);
   const sourcePath = sourcePathForAbs(abs);
   if (isAudioFile(rel)) return cancelAudioPreparation(sourcePath);
   const cancelled = await cancelConversionAndWait(sourcePath, 'user-request');
@@ -187,7 +193,7 @@ async function cancelFilePreparationInFolder(relPath: string, folderName?: strin
   return cancelled;
 }
 
-function prepareConvertibleInFolder(relPath: string, folderName?: string): void {
+async function prepareConvertibleInFolder(relPath: string, folderName?: string): Promise<void> {
   const rel = typeof relPath === 'string' ? relPath.trim() : '';
   if (!rel) {
     const err = new Error('path required');
@@ -195,7 +201,7 @@ function prepareConvertibleInFolder(relPath: string, folderName?: string): void 
     throw err;
   }
   const { folderRoot } = requireRequestFolder(folderName?.trim() || undefined);
-  const abs = requireExistingFileInFolder(folderRoot, rel);
+  const abs = await requireExistingFileInFolderAsync(folderRoot, rel);
   if (!prepareConvertibleSource(abs, rel)) {
     const err = new Error('only DOCX and media files require interactive preparation');
     (err as any).status = 415;
@@ -215,9 +221,9 @@ function normalizeLanguageOverride(value: unknown): string | undefined {
 export function mount(app: express.Express): void {
   // Opening a DOCX is an explicit user gesture. Queue it in the light lane
   // at interactive priority (or promote the existing queued task).
-  app.post('/api/files/prepare', (req, res) => {
+  app.post('/api/files/prepare', async (req, res) => {
     try {
-      prepareConvertibleInFolder(req.body?.path, parseFolderParam(req.body?.folder));
+      await prepareConvertibleInFolder(req.body?.path, parseFolderParam(req.body?.folder));
       res.json({ ok: true });
     } catch (err: unknown) {
       sendError(res, err);
@@ -392,13 +398,13 @@ export function mount(app: express.Express): void {
   // failure row. PDF/image/DOCX/audio sources also clear stale final derived
   // artifacts and re-run extraction; directly readable files schedule a
   // reconcile so the index is rebuilt from source.
-  app.post('/api/files/reprocess', (req, res) => {
+  app.post('/api/files/reprocess', async (req, res) => {
     try {
       const rel = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
       const targetFolder = typeof req.body?.folder === 'string' && req.body.folder.trim()
         ? req.body.folder.trim()
         : undefined;
-      const mode = reprocessFileInFolder(rel, targetFolder, { language: req.body?.language });
+      const mode = await reprocessFileInFolder(rel, targetFolder, { language: req.body?.language });
       res.json({ ok: true, mode });
     } catch (err: unknown) {
       sendError(res, err);

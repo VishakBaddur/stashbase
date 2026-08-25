@@ -175,3 +175,51 @@ test('resolveUnder blocks existing and creatable symlink or junction escapes', (
     filesystemPath.absolute(fs.realpathSync.native(outside)),
   );
 });
+
+test('resolveUnderAsync matches resolveUnder for symlink or junction escapes', async (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stashbase-path-async-'));
+  const root = path.join(temp, 'root');
+  const outside = path.join(temp, 'outside');
+  fs.mkdirSync(root);
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(root, 'inside.md'), 'inside');
+  fs.writeFileSync(path.join(outside, 'outside.md'), 'outside');
+  fs.symlinkSync(outside, path.join(root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(path.join(outside, 'outside.md'), path.join(root, 'linked-file.md'));
+  }
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+
+  assert.equal(
+    await filesystemPath.resolveUnderAsync(root, 'inside.md', { access: 'existing' }),
+    filesystemPath.absolute(path.join(root, 'inside.md')),
+  );
+  await assert.rejects(
+    () => filesystemPath.resolveUnderAsync(root, 'link/outside.md', { access: 'existing' }),
+    /escapes folder through symlink/,
+  );
+  await assert.rejects(
+    () => filesystemPath.resolveUnderAsync(root, 'link/new.md', { access: 'creatable' }),
+    /escapes folder through symlink/,
+  );
+  if (process.platform !== 'win32') {
+    await assert.rejects(
+      () => filesystemPath.resolveUnderAsync(root, 'linked-file.md', { access: 'creatable' }),
+      /escapes folder through symlink/,
+    );
+  }
+  assert.equal(
+    await filesystemPath.resolveUnderAsync(root, 'new/child.md', { access: 'creatable' }),
+    filesystemPath.absolute(path.join(root, 'new', 'child.md')),
+  );
+
+  // resolveUnder and resolveUnderAsync must agree on every access mode, not
+  // just the escape cases, since routes migrate to the async path one at a
+  // time and both are expected to behave identically in the meantime.
+  for (const access of ['lexical', 'existing', 'creatable'] as const) {
+    assert.equal(
+      await filesystemPath.resolveUnderAsync(root, 'inside.md', { access }),
+      filesystemPath.resolveUnder(root, 'inside.md', { access }),
+    );
+  }
+});
