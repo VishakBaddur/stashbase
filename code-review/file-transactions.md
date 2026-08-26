@@ -35,6 +35,19 @@
 - App-maintained derived paths are never writable source targets. Dot-directory
   Agent configuration remains writable even though dot-directories stay out of
   the knowledge index.
+- Request-handling Adapters perform potentially slow realpath,
+  canonicalization, existence, and type checks asynchronously. A sync path
+  resolver is allowed only where its caller is already outside the shared Node
+  request-handling event loop or the work is otherwise bounded.
+
+### Known gap — request-path filesystem liveness
+
+`FilesystemPathModule.resolveUnderAsync` is available and the Preparation
+prepare, reprocess, and cancellation paths use it, but other request Adapters
+still call the sync resolver. On macOS, its containment checks also reach the
+sync mounted-volume identity implementation. Path safety remains enforced, but
+slow or network-mounted folders can still block unrelated requests, and no
+focused concurrency evidence currently establishes the required liveness.
 
 ## Save and Version Contract
 

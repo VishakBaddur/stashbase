@@ -42,10 +42,10 @@ export interface FilesystemPathModule {
   canonicalRelative(root: string, relative: string): string;
   /** Resolve a folder-relative path and optionally enforce realpath safety. */
   resolveUnder(root: string, relative: string, options?: ResolveUnderOptions): string;
-  /** Async equivalent of `resolveUnder()`. Prefer this on the request-handling
-   *  path: `resolveUnder()` performs its symlink/realpath checks with sync
-   *  syscalls, which block the single Node event loop shared by every
-   *  window's file, search, and MCP requests. */
+  /** Promise-based equivalent of `resolveUnder()` for staged migration of
+   *  request-handling callers. Canonicalization and realpath checks use async
+   *  filesystem APIs; platform identity/containment still shares the sync
+   *  implementation where noted by the File Transactions known gap. */
   resolveUnderAsync(root: string, relative: string, options?: ResolveUnderOptions): Promise<string>;
 }
 
@@ -286,10 +286,10 @@ export function createFilesystemPath(
   }
 
   // --- Async mirrors for the request-handling path -------------------------
-  // These duplicate the sync functions above one-for-one using fs.promises
-  // instead of the *Sync variants, so the single Node event loop shared by
-  // every window's file/search/MCP requests isn't blocked by a slow syscall
-  // (e.g. realpath or readdir against a network-mounted or slow folder).
+  // These duplicate the sync functions above one-for-one using async
+  // filesystem APIs for canonicalization and realpath work. They establish a
+  // migration path for request handlers; platform identity/containment still
+  // shares sync helpers until the File Transactions known gap is closed.
   // Kept as separate functions, rather than a sync/async flag on the
   // existing ones, so neither implementation has to guard against `await`
   // inside a hot, already-audited sync path.

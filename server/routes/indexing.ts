@@ -87,9 +87,8 @@ function sourcePathForAbs(absPath: string): string {
 /** Resolve an explicit-folder request without allowing a symlink inside the
  * library folder to redirect preparation/extraction outside that folder.
  *
- * Async so the containment/symlink checks (resolveUnderAsync) and the
- * existence/type checks below don't block the single Node event loop that
- * serves every window's file, search, and MCP requests. */
+ * Uses the promise-based resolver so canonicalization, realpath, existence,
+ * and type checks can move off the single Node request-handling event loop. */
 async function requireExistingFileInFolderAsync(folderRoot: string, rel: string): Promise<string> {
   let abs: string;
   try {
